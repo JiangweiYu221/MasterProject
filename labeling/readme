@@ -2,7 +2,7 @@ labeling.py to start label
 
 rename.py to rename rawfile
 
-convert_bdf.f to export .set to .bdf
+convert_bdf.m to export .set to .bdf (rememer to open eeglab and install BIOSIG)
 
 read_bdf.py to filter,bipolar_montage the rawdata
 
