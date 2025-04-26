@@ -19,6 +19,7 @@ model_path = "best_model_selfattention.pth"
 train_img = "training_metrics_selfattention.png"
 confusion_matrix_path = "confusion_matrix_selfattention.png"
 report_path = 'classification_report_selfattention.txt'
+confusion_matrix_npy_path = "confusion_matrix_selfattention.npy"
 
 # 加载数据
 train_data = np.load('/home/mnt_disk1/model_result/data_train.npy')
@@ -27,6 +28,27 @@ val_data = np.load('/home/mnt_disk1/model_result/data_val.npy')
 val_labels = np.load('/home/mnt_disk1/model_result/label_val.npy')
 test_data = np.load('/home/mnt_disk1/model_result/data_test.npy')
 test_labels = np.load('/home/mnt_disk1/model_result/label_test.npy')
+
+train_data = train_data*1e6
+val_data = val_data*1e6
+test_data = test_data*1e6
+
+def trainlossweight(labels):
+    # 统计每个类别的出现次数
+    unique_elements, counts = np.unique(labels, return_counts=True)
+
+    # 创建一个字典来存储类别及其对应的频率
+    class_frequencies = dict(zip(unique_elements, counts))
+
+    # 计算权重
+    # 权重可以是频率的倒数，也可以是其他策略
+    total_samples = labels.size
+    class_weights = {class_label: total_samples / (frequency * len(unique_elements)) for class_label, frequency in
+                     class_frequencies.items()}
+
+    # 将权重转换为 PyTorch 张量
+    class_weights_tensor = torch.tensor(list(class_weights.values()), dtype=torch.float32)
+    return class_weights_tensor
 
 class EEGDataset(Dataset):
     def __init__(self, data, labels):
@@ -182,12 +204,12 @@ class UNetEEG(nn.Module):
 
 
 train_losses = []
-
+loss_weight = trainlossweight(train_labels)
 
 def train_model(model, train_loader, val_loader, optimizer, num_epochs=256):
     model.to(device)
     dice_loss = DiceLoss(softmax=True, to_onehot_y=True, squared_pred=True)
-    ce_loss = nn.CrossEntropyLoss(weight=torch.tensor([0.2] + [1.0] * 15).to(device))  # 增加类别权重
+    ce_loss = nn.CrossEntropyLoss(weight=loss_weight.to(device))  # 增加类别权重
     # 初始化记录器
     train_losses = []
     val_losses = []
@@ -283,6 +305,9 @@ def evaluate(model, test_loader):
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
+    test_data_npy = []
+    test_label_npy = []
+    test_preds_npy = []
     class_names = ['Background', 'Resting', "ver_eyem", "hor_eyem", "blink",
                    "hor_headm", "ver_headm", "tongue","chew", "swallow",
                    "eyebrow", "blink_hor_headm", "blink_ver_headm","blink_eyebrow",
@@ -296,14 +321,25 @@ def evaluate(model, test_loader):
             outputs = model(data)
             preds = torch.argmax(outputs, dim=1)
 
+            # 保存到列表中
+            test_data_npy.append(data.cpu().numpy())  # shape: [64, 34, 625]
+            test_label_npy.append(labels.cpu().numpy())  # shape: [64, 34, 625] (假设是逐点标签)
+            test_preds_npy.append(preds.cpu().numpy())  # shape: [64, 34, 625]
+
             for true, pred in zip(labels.view(-1), preds.view(-1)):
                 confusion_matrix[true.item(), pred.item()] += 1   #横轴为真实标签，纵轴为预测标签
+
+    # 保存为 .npy 文件
+    np.save('check_data.npy', test_data_npy)
+    np.save('check_labels.npy', test_label_npy)
+    np.save('check_preds.npy', test_preds_npy)
+    np.save(confusion_matrix_npy_path, confusion_matrix)
 
     # 绘制混淆矩阵热力图
     plt.figure(figsize=(15, 12))
     sns.heatmap(confusion_matrix, annot=True, fmt='d', cmap='plasma',
-                xticklabels=class_names, yticklabels=class_names,
-                vmin=0, vmax=np.max(confusion_matrix) / 500)
+                xticklabels=class_names, yticklabels=class_names
+                )# vmin=0, vmax=np.max(confusion_matrix) / 500
     plt.title('Confusion Matrix')
     plt.xlabel('Predicted')
     plt.ylabel('True')
@@ -346,5 +382,5 @@ model = UNetEEG().to(device)
 optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)  # 添加正则化
 
 # 训练和评估
-train_model(model, train_loader, val_loader, optimizer)
+# train_model(model, train_loader, val_loader, optimizer)
 evaluate(model, test_loader)
